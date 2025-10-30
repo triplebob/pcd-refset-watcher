@@ -1,0 +1,107 @@
+name: File Hash Monitor
+
+on:
+  schedule:
+    - cron: '0 9 * * *'  # Check daily at 9 AM UTC
+  workflow_dispatch:  # Allow manual triggers
+
+env:
+  FILE_URL: ${{ secrets.FILE_URL }}
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests
+        
+    - name: Check file for changes
+      id: file_check
+      run: |
+        # Try using curl with browser headers
+        HEADERS=$(curl -s -I -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+                       -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" \
+                       -H "Accept-Language: en-GB,en;q=0.5" \
+                       -H "Connection: keep-alive" \
+                       "${{ env.FILE_URL }}" || echo "CURL_FAILED")
+        
+        if [[ "$HEADERS" == "CURL_FAILED" ]]; then
+          echo "Curl failed, trying Python approach..."
+          python monitor.py
+        else
+          echo "Curl succeeded, processing headers..."
+          SIGNATURE=$(echo "$HEADERS" | grep -E "(Last-Modified|ETag|Content-Length)" | md5sum | cut -d' ' -f1)
+          echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
+          
+          # Check if signature changed (simplified version)
+          if [ -f last_hash.txt ]; then
+            OLD_SIG=$(cat last_hash.txt)
+            if [ "$SIGNATURE" != "$OLD_SIG" ]; then
+              echo "hash_changed=true" >> $GITHUB_OUTPUT
+              echo "$SIGNATURE" > last_hash.txt
+            else
+              echo "hash_changed=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "hash_changed=true" >> $GITHUB_OUTPUT
+            echo "$SIGNATURE" > last_hash.txt
+          fi
+          
+          echo "new_hash=$SIGNATURE" >> $GITHUB_OUTPUT
+          echo "old_hash=${OLD_SIG:-none}" >> $GITHUB_OUTPUT
+          echo "timestamp=$(date -Iseconds)" >> $GITHUB_OUTPUT
+        fi
+      
+    - name: Commit hash update
+      if: steps.file_check.outputs.hash_changed == 'true'
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add last_hash.txt
+        git commit -m "Update file signature: ${{ steps.file_check.outputs.new_hash }}"
+        git push
+        
+    - name: Create GitHub Issue
+      if: steps.file_check.outputs.hash_changed == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = `🚨 PCD RefSet File Change Detected - ${new Date().toISOString().split('T')[0]}`;
+          const body = `## PCD RefSet File Change Alert
+          
+          The monitored NHS PCD RefSet file has changed!
+          
+          **Details:**
+          - **File URL:** ${{ env.FILE_URL }}
+          - **Previous signature:** \`${{ steps.file_check.outputs.old_hash }}\`
+          - **New signature:** \`${{ steps.file_check.outputs.new_hash }}\`
+          - **Detection time:** ${{ steps.file_check.outputs.timestamp }}
+          
+          **Next steps:**
+          - Download the updated file from the URL above
+          - Review changes in the PCD RefSet content
+          - Update any dependent systems or processes
+          
+          ---
+          *This issue was automatically created by the PCD RefSet Monitor*`;
+          
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['pcd-refset', 'file-change', 'automated']
+          });
