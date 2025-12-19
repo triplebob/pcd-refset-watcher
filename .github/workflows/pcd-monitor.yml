@@ -1,0 +1,158 @@
+name: PCD RefSet Monitor
+
+on:
+  schedule:
+    - cron: '0 6 * * 1,3,5'  # Monday, Wednesday, Friday at 7 AM GMT (6 AM UTC)
+  workflow_dispatch:  # Allow manual triggers
+
+env:
+  FILE_URL: ${{ secrets.FILE_URL }}
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests
+
+    - name: Check for updates
+      id: version_check
+      continue-on-error: true
+      run: |
+        # Query Power BI API for current release version
+        if python check_powerbi_api.py; then
+          echo "check_status=success" >> $GITHUB_OUTPUT
+
+          # Verify version was retrieved
+          if [ ! -f last_version.txt ]; then
+            echo "check_status=error" >> $GITHUB_OUTPUT
+            echo "error_message=Version file not created" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          CURRENT_VERSION=$(cat last_version.txt)
+          echo "Current version: $CURRENT_VERSION"
+
+          # Validate version format (should contain date pattern)
+          if ! echo "$CURRENT_VERSION" | grep -qE '\d{1,2}\s+\w+\s+\d{4}'; then
+            echo "check_status=error" >> $GITHUB_OUTPUT
+            echo "error_message=Invalid version format: $CURRENT_VERSION" >> $GITHUB_OUTPUT
+            echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Load stored version
+          STORED_VERSION="none"
+          if [ -f stored_version.txt ]; then
+            STORED_VERSION=$(cat stored_version.txt)
+          fi
+
+          echo "Previous version: $STORED_VERSION"
+
+          # Check for changes
+          if [ "$CURRENT_VERSION" != "$STORED_VERSION" ]; then
+            echo "New version detected!"
+            echo "version_changed=true" >> $GITHUB_OUTPUT
+            cp last_version.txt stored_version.txt
+          else
+            echo "No version change"
+            echo "version_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "stored_version=$STORED_VERSION" >> $GITHUB_OUTPUT
+        else
+          echo "check_status=error" >> $GITHUB_OUTPUT
+          echo "error_message=API query failed" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        echo "timestamp=$(date -Iseconds)" >> $GITHUB_OUTPUT
+
+    - name: Commit version update
+      if: steps.version_check.outputs.version_changed == 'true'
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add stored_version.txt
+        git commit -m "Update PCD TRUD version: ${{ steps.version_check.outputs.current_version }}"
+        git push
+
+    - name: Create update notification
+      if: steps.version_check.outputs.version_changed == 'true' && steps.version_check.outputs.check_status == 'success'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = `PCD RefSet Update Detected - ${new Date().toISOString().split('T')[0]}`;
+          const body = `## PCD RefSet Update Alert
+
+          A new PCD TRUD release has been published.
+
+          **Version Information:**
+          - **Previous version:** ${`${{ steps.version_check.outputs.stored_version }}`}
+          - **New version:** ${`${{ steps.version_check.outputs.current_version }}`}
+          - **Detection time:** ${{ steps.version_check.outputs.timestamp }}
+
+          **Resources:**
+          - [Power BI Dashboard](https://app.powerbi.com/view?r=eyJrIjoiNDRmYjEwMzQtZGE3MS00ZGE5LTgwMTUtNjQ2NGE1NTZiYmEzIiwidCI6IjM3YzM1NGIyLTg1YjAtNDdmNS1iMjIyLTA3YjQ4ZDc3NGVlMyJ9)
+          - [Download ZIP file](${{ env.FILE_URL }})
+
+          **Action Required:**
+          1. Review changes on the Power BI dashboard
+          2. Download the updated reference set file
+          3. Update dependent systems as needed
+
+          ---
+          *Automated notification from PCD RefSet Monitor*`;
+
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['pcd-refset', 'update', 'automated']
+          });
+
+    - name: Create error notification
+      if: steps.version_check.outputs.check_status == 'error'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = `Monitor Error - ${new Date().toISOString().split('T')[0]}`;
+          const body = `## PCD RefSet Monitor Error
+
+          The monitoring system encountered an error while checking for updates.
+
+          **Error Details:**
+          - **Error:** ${{ steps.version_check.outputs.error_message || 'Unknown error occurred' }}
+          - **Time:** ${{ steps.version_check.outputs.timestamp }}
+          - **Last known version:** ${`${{ steps.version_check.outputs.current_version }}`|| 'Unknown'}
+
+          **Action Required:**
+          1. Check the [workflow run logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          2. Verify the Power BI dashboard is accessible
+          3. Check if the API structure has changed
+
+          ---
+          *Automated error notification from PCD RefSet Monitor*`;
+
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['pcd-refset', 'error', 'automated']
+          });
