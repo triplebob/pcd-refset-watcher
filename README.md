@@ -1,14 +1,14 @@
 # PCD RefSet Monitor
 
-Automated monitoring for NHS Digital Primary Care Domain (PCD) TRUD reference set updates.
+Automated monitoring for NHS Digital Primary Care Domain (PCD) refset updates.
 
 ## Overview
 
-This tool monitors the NHS Digital PCD RefSet Power BI dashboard for new TRUD releases and automatically creates GitHub issues when updates are detected.
+This tool monitors the NHS Digital PCD RefSet Power BI dashboard for new refset releases and automatically creates GitHub issues when updates are detected.
 
 ## How It Works
 
-1. **Scheduled Checks**: Runs automatically Monday, Wednesday, and Friday at 7 AM GMT
+1. **Scheduled Checks**: Runs automatically daily at 7 AM GMT
 2. **API Query**: Queries the Power BI dashboard API for the current release version
 3. **Change Detection**: Compares against the stored version
 4. **Notifications**: Creates a GitHub issue when a new version is detected
@@ -22,15 +22,9 @@ This tool monitors the NHS Digital PCD RefSet Power BI dashboard for new TRUD re
 
 ## Configuration
 
-### Required Secrets
-
-Set the following in your GitHub repository secrets:
-
-- `FILE_URL`: URL to the PCD RefSet ZIP file download
-
 ### Workflow Schedule
 
-Default schedule: Monday, Wednesday, Friday at 7 AM GMT
+Default schedule: Daily at 7 AM GMT
 To modify, edit the cron expression in `.github/workflows/pcd-monitor.yml`
 
 ## Manual Execution
