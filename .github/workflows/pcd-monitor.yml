@@ -44,7 +44,7 @@ jobs:
           echo "Current version: $CURRENT_VERSION"
 
           # Validate version format (should contain date pattern)
-          if ! echo "$CURRENT_VERSION" | grep -qE '\d{1,2}\s+\w+\s+\d{4}'; then
+          if ! echo "$CURRENT_VERSION" | grep -qE '[0-9]{1,2} [A-Za-z]+ [0-9]{4}'; then
             echo "check_status=error" >> $GITHUB_OUTPUT
             echo "error_message=Invalid version format: $CURRENT_VERSION" >> $GITHUB_OUTPUT
             echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
